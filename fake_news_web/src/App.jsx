@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 
 function App() {
   const [text, setText] = useState('');
@@ -38,9 +39,10 @@ function App() {
   };
 
   return (
-    <div className="glass-container">
-      <h1>📡 News Analyzer AI</h1>
-      <p className="subtitle">Paste a news article below to instantly verify its authenticity using Machine Learning.</p>
+    <>
+      <div className="glass-container">
+        <h1>📡 News Analyzer AI</h1>
+        <p className="subtitle">Paste a news article below to instantly verify its authenticity using Machine Learning.</p>
 
       {error && (
         <div className="alert-warning">
@@ -88,7 +90,9 @@ function App() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+      <Analytics />
+    </>
   );
 }
 
