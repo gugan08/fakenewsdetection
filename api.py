@@ -9,7 +9,16 @@ from pydantic import BaseModel
 # --- NLTK Setup (graceful fallback) ---
 STOP_WORDS = {"a", "an", "the", "and", "is", "in", "it", "to", "of", "for",
               "on", "that", "this", "with", "was", "are", "be", "has", "had",
-              "not", "but", "or", "at", "by", "from", "as", "do", "if", "no"}
+              "not", "but", "or", "at", "by", "from", "as", "do", "if", "no",
+              "he", "she", "they", "we", "you", "i", "me", "my", "your",
+              "his", "her", "its", "our", "their", "what", "which", "who",
+              "when", "where", "how", "all", "each", "every", "both", "few",
+              "more", "most", "other", "some", "such", "than", "too", "very",
+              "can", "will", "just", "should", "now", "also", "into", "only",
+              "about", "up", "out", "so", "him", "them", "then", "these",
+              "those", "been", "have", "would", "could", "did", "does",
+              "said", "were", "over", "after", "before", "between", "own",
+              "same", "because", "while", "during", "through"}
 try:
     import nltk
     from nltk.corpus import stopwords
@@ -76,16 +85,35 @@ async def predict_news(request: PredictionRequest):
     cleaned = preprocess(request.text)
     vec_input = vectorizer.transform([cleaned])
 
-    # Calculate confidence
+    # Get prediction
+    prediction = model.predict(vec_input)[0]
+
+    # Calculate confidence using decision function or predict_proba
     confidence = 50.0
     if hasattr(model, "predict_proba"):
-        confidence = model.predict_proba(vec_input)[0][1] * 100
+        proba = model.predict_proba(vec_input)[0]
+        confidence = proba[1] * 100  # probability of being REAL
     elif hasattr(model, "decision_function"):
         dist = model.decision_function(vec_input)[0]
+        # Sigmoid to convert distance to probability
         confidence = (1 / (1 + math.exp(-dist))) * 100
 
-    # Threshold: > 50% → Real
-    if confidence > 50.0:
-        return PredictionResponse(prediction=1, label_string="Mostly REAL News", confidence=confidence)
+    # Generate label based on prediction and confidence
+    if prediction == 1:
+        if confidence >= 80:
+            label = "Verified REAL News"
+        elif confidence >= 65:
+            label = "Mostly REAL News"
+        else:
+            label = "Likely REAL News"
+        return PredictionResponse(prediction=1, label_string=label, confidence=confidence)
     else:
-        return PredictionResponse(prediction=0, label_string="Likely FAKE News", confidence=confidence)
+        fake_confidence = 100 - confidence
+        if fake_confidence >= 80:
+            label = "Confirmed FAKE News"
+        elif fake_confidence >= 65:
+            label = "Likely FAKE News"
+        else:
+            label = "Possibly FAKE News"
+        return PredictionResponse(prediction=0, label_string=label, confidence=confidence)
+
