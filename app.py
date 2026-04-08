@@ -1,15 +1,26 @@
 import streamlit as st
 import joblib
-import pandas as pd
-import re
-import nltk
-from nltk.corpus import stopwords
 import os
+import re
+import math
 
+# --- NLTK Setup (with graceful fallback) ---
+STOP_WORDS = {"a", "an", "the", "and", "is", "in", "it", "to", "of", "for",
+              "on", "that", "this", "with", "was", "are", "be", "has", "had",
+              "not", "but", "or", "at", "by", "from", "as", "do", "if", "no"}
+try:
+    import nltk
+    from nltk.corpus import stopwords
+    nltk.download("stopwords", quiet=True)
+    STOP_WORDS = set(stopwords.words("english"))
+except Exception:
+    pass
+
+# --- Page Config ---
 st.set_page_config(page_title="Fake News Detector", page_icon="📡", layout="centered")
 
 st.markdown("""
-    <style>
+<style>
     .prediction-card-fake {
         background-color: #ffcccc;
         padding: 20px;
@@ -30,84 +41,86 @@ st.markdown("""
         text-align: center;
         border-left: 5px solid #006600;
     }
-    </style>
+</style>
 """, unsafe_allow_html=True)
 
-try:
-    nltk.download('stopwords', quiet=True)
-except Exception:
-    pass
+# --- Helpers ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 @st.cache_resource
 def load_models():
+    """Load the trained model and vectorizer from disk."""
     try:
-        model = joblib.load('model.pkl')
-        vectorizer = joblib.load('vectorizer.pkl')
+        model = joblib.load(os.path.join(BASE_DIR, "model.pkl"))
+        vectorizer = joblib.load(os.path.join(BASE_DIR, "vectorizer.pkl"))
         return model, vectorizer
     except FileNotFoundError:
         return None, None
 
-def preprocess(text):
-    text = re.sub(r'[^a-zA-Z\s]', '', text)
-    text = text.lower()
-    
-    try:
-        stop_words = set(stopwords.words('english'))
-    except:
-        stop_words = {"a", "the", "and", "is", "in", "it", "to", "of", "for", "on", "that", "this", "with"}
-        
-    tokens = text.split()
-    tokens = [word for word in tokens if word not in stop_words]
-    return ' '.join(tokens)
 
+def preprocess(text: str) -> str:
+    """Clean and tokenize input text, removing stop words."""
+    text = re.sub(r"[^a-zA-Z\s]", "", text).lower()
+    tokens = [w for w in text.split() if w not in STOP_WORDS]
+    return " ".join(tokens)
+
+
+def get_confidence(model, vectorized_input) -> float | None:
+    """Extract prediction confidence from the model."""
+    try:
+        if hasattr(model, "predict_proba"):
+            return model.predict_proba(vectorized_input)[0][1] * 100
+        if hasattr(model, "decision_function"):
+            dist = model.decision_function(vectorized_input)[0]
+            return (1 / (1 + math.exp(-dist))) * 100
+    except Exception:
+        pass
+    return None
+
+
+# --- UI ---
 st.title("📡 Fake News Detection System")
 st.markdown("Enter a news headline or article below to verify its authenticity.")
 
 model, vectorizer = load_models()
 
 if model is None or vectorizer is None:
-    st.error("⚠️ **Model not found!** Please run `python train_model.py` to train and generate the prediction model.")
-    st.info("If you haven't installed dependencies yet, open a terminal in this folder and run `pip install streamlit pandas scikit-learn nltk joblib`")
+    st.error("⚠️ **Model not found!** Run `python train_model.py` first.")
+    st.info("Install dependencies: `pip install -r requirements.txt`")
 else:
-    user_input = st.text_area("📰 News Content", height=200, placeholder="Paste the news article or headline here...")
-    
+    user_input = st.text_area(
+        "📰 News Content", height=200,
+        placeholder="Paste the news article or headline here..."
+    )
+
     if st.button("Check Authenticity"):
         if not user_input.strip():
             st.warning("Please enter some text to check.")
         else:
             with st.spinner("Analyzing text patterns using Machine Learning..."):
-                cleaned_text = preprocess(user_input)
-                vectorized_input = vectorizer.transform([cleaned_text])
-                prediction = model.predict(vectorized_input)[0]
-                
-                try:
-                    if hasattr(model, "predict_proba"):
-                        # Get probability of class 1 (Real News)
-                        real_prob = model.predict_proba(vectorized_input)[0][1]
-                        confidence = real_prob * 100
-                    elif hasattr(model, "decision_function"):
-                        import math
-                        # Raw distance from hyperplane (positive = Real, negative = Fake)
-                        dist = model.decision_function(vectorized_input)[0]
-                        confidence = (1 / (1 + math.exp(-dist))) * 100
-                    else:
-                        confidence = None
-                except:
-                    confidence = None
+                cleaned = preprocess(user_input)
+                vec_input = vectorizer.transform([cleaned])
+                confidence = get_confidence(model, vec_input)
 
-                # Apply user requested explicit threshold:
+                # Threshold: > 50% confidence → Real
                 if confidence is not None:
-                    if confidence > 50.0:
-                        prediction = 1
-                    else:
-                        prediction = 0
-
-                if prediction == 1:
-                    conf_text = f" (Confidence: {confidence:.2f}%)" if confidence else ""
-                    st.markdown(f'<div class="prediction-card-real">✅ Mostly REAL News{conf_text}</div>', unsafe_allow_html=True)
+                    is_real = confidence > 50.0
                 else:
-                    conf_text = f" (Confidence: {100.0 - confidence:.2f}%)" if confidence else ""
-                    st.markdown(f'<div class="prediction-card-fake">🚫 Likely FAKE News{conf_text}</div>', unsafe_allow_html=True)
+                    is_real = model.predict(vec_input)[0] == 1
+
+                if is_real:
+                    pct = f" (Confidence: {confidence:.2f}%)" if confidence else ""
+                    st.markdown(
+                        f'<div class="prediction-card-real">✅ Mostly REAL News{pct}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    pct = f" (Confidence: {100.0 - confidence:.2f}%)" if confidence else ""
+                    st.markdown(
+                        f'<div class="prediction-card-fake">🚫 Likely FAKE News{pct}</div>',
+                        unsafe_allow_html=True,
+                    )
 
 st.markdown("---")
 st.caption("Note: This system uses a machine learning classifier.")
